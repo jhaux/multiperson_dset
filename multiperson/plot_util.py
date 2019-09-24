@@ -15,6 +15,8 @@ from tqdm import tqdm, trange
 from abc_pose.pose_sampling.keypoint_models import ALPHAPOSE_COCO_TUPLES
 from abc_pose.pose_sampling.dist import kp2ang
 
+import hashlib
+
 
 def plot_seqs(dset, n=10, nframes=10):
     '''Given a :class:`MultiPersonDataset` show us a visualization of some
@@ -89,7 +91,7 @@ def plot_seqs(dset, n=10, nframes=10):
                 im1 = plt.imread(frames[i])
             except Exception as e:
                 continue
-            im1box = OffsetImage(im1, zoom=0.10)
+            im1box = OffsetImage(im1, zoom=0.05)
             im1box.image.axes = ax
 
             ab = AnnotationBbox(im1box, [i, -1],
@@ -121,7 +123,7 @@ def plot_seqs(dset, n=10, nframes=10):
                 except Exception as e:
                     print(e)
                     continue
-                im1box = OffsetImage(im1, zoom=0.30)
+                im1box = OffsetImage(im1, zoom=0.075)
                 im1box.image.axes = ax
 
                 frame_idx = pdata[i][2]
@@ -148,7 +150,7 @@ def plot_seqs(dset, n=10, nframes=10):
         ax.set_title(title_str)
 
         savename = '{}-person_seq_lengths.png'.format(name)
-        f.savefig(savename, dpi=600)
+        f.savefig(savename, dpi=300)
         print('Saved plot at {}'.format(savename))
 
         plt.close()
@@ -202,13 +204,16 @@ def plot_app_variance_at_similiar_pose(MP, n_app=10, n_pose=10, sp=None,
     examples = MP[choice_indices]
     examples_indices = choice_indices
     example_distances = dist2ref[choice_indices]
+
     var_on_examples = []
     var_indices = []
+    var_dists = []
+    var_pids = []
 
     apps = np.random.choice(np.unique(all_pids), size=n_app)
     print(apps.shape)
 
-    for idx, ex in zip(choice_indices, examples):
+    for idx, ex in zip(tqdm(choice_indices, desc='CI'), examples):
         kps = ex['keypoints_rel']
         pid = ex['pid']
 
@@ -221,40 +226,73 @@ def plot_app_variance_at_similiar_pose(MP, n_app=10, n_pose=10, sp=None,
         else:
             dist2ref = dist_fn(all_poses, kps_, **dist_fn_kwargs)
 
-        dist2ref = np.argsort(dist2ref)
-        pids_ = all_pids[dist2ref]
+        all_distances = dist2ref
+        d2r_idx = np.argsort(dist2ref)
+        pids_ = np.copy(all_pids[d2r_idx])
+        tqdm.write('d2r {}'.format(len(d2r_idx)))
 
         var_ex = []
         var_idx = []
+        var_pid = []
+
+        if only_other_vid:
+            d2r_idx = d2r_idx[pids_ != pid]
+            pids_ = pids_[pids_ != pid]
+            tqdm.write('d2r {}'.format(len(d2r_idx)))
 
         if not filter_by_app:
-            coc = np.round(np.linspace(0, n_app*25, n_app)).astype(int)
-            if only_other_vid:
-                choice_indices = dist2ref[pids_ != pid][coc]
-            else:
-                choice_indices = dist2ref[coc]
+            if not only_one_ex_per_app:
+                coc = np.round(np.linspace(0, n_app*25, n_app)).astype(int)
+                if only_other_vid:
+                    choice_indices = d2r_idx[pids_ != pid][coc]
+                else:
+                    choice_indices = d2r_idx[coc]
 
-            var_ex = MP[choice_indices]
+            else:
+                choice_indices = []
+                for i in trange(n_app, desc='Filter'):
+                    choice_idx = d2r_idx[0]
+
+                    ex = MP[choice_idx]
+                    var_ex += [ex]
+
+                    pid_choice = ex['pid']
+                    var_pid += [pid_choice]
+
+                    choice_indices += [choice_idx]
+                    d2r_idx = d2r_idx[pids_ != pid_choice]
+                    pids_ = pids_[pids_ != pid_choice]
+                    tqdm.write('d2r {}'.format(len(d2r_idx)))
+                    tqdm.write('idx {}'.format(choice_idx))
+                choice_indices = np.array(choice_indices)
+
             var_idx = choice_indices
+            dists = [all_distances[i] for i in choice_indices]
+            tqdm.write('d {}'.format(dists))
 
         else:
-            for app in apps:
-                dist2ref_ = dist2ref[pids_ == app]
+            if not only_one_ex_per_app:
+                for app in apps:
+                    d2r_idx_ = d2r_idx[pids_ == app]
 
-                var_ex += [MP[dist2ref_[0]]]
-                var_idx += [dist2ref_[0]]
+                    var_ex += [MP[d2r_idx_[0]]]
+                    var_idx += [d2r_idx_[0]]
+            else:
+                raise NotImplementedError("Need to do that later")
 
         var_on_examples += [var_ex]
         var_indices += [var_idx]
+        var_dists += [dists]
+        var_pids += [var_pid]
 
-        if only_one_ex_per_app:
-            all_poses = all_poses[all_pids != pid]
-            all_pids = all_pids[all_pids != pid]
+    print(np.shape(var_on_examples))
+    print(np.shape(var_dists))
+    print(np.shape(var_indices))
 
     f, AX = plt.subplots(n_app+2, n_pose, figsize=(n_pose, n_app*2))
 
-    for r_idx, Ax in enumerate(AX):
-        for c_idx, ax in enumerate(Ax):
+    for r_idx, Ax in enumerate(tqdm(AX, desc='rows')):
+        for c_idx, ax in enumerate(tqdm(Ax, desc='cols')):
             if r_idx == 0:
                 kps = examples[c_idx]['keypoints_rel'] * 256
                 # ax.scatter(kps[..., 0], kps[..., 1], marker='.')
@@ -271,15 +309,27 @@ def plot_app_variance_at_similiar_pose(MP, n_app=10, n_pose=10, sp=None,
                 ax.imshow(plt.imread(crop_path))
                 ax.axis('off')
             else:
-                crop_path = var_on_examples[c_idx][r_idx - 2]['crop_path']
+                ex = var_on_examples[c_idx][r_idx - 2]
+                crop_path = ex['crop_path']
                 ax.imshow(plt.imread(crop_path))
                 ax.axis('off')
+
+                dist = var_dists[c_idx][r_idx - 2]
+                pid = var_pids[c_idx][r_idx - 2]
+                pid_hash = int(hashlib.sha1(pid.encode()).hexdigest(), 16) % (10 ** 8)
+                ax.set_title("$\Delta={:0.3}$\nP {}".format(dist, pid_hash), fontsize=6)
 
             if c_idx == 0 and r_idx > 1 and filter_by_app:
                 ax.axis('on')
                 ax.set_ylabel(apps[r_idx-2], rotation=0, horizontalalignment='right', fontsize=9)
                 ax.set_xticks([])
                 ax.set_yticks([])
+
+    for vp in var_pids:
+        print(vp)
+
+    for exs in var_on_examples:
+        print([ex['pid'] for ex in exs])
 
     if sp is None:
         sp = 'app_vs_pose_var.png'
@@ -325,15 +375,15 @@ def plot_dset_statistics(MP, n_pose=5):
 
     # Distance of reference to all other poses to sort them accordingly
     diff = all_poses - np.expand_dims(ref_pose, 0)
-    dist2ref = np.mean(np.linalg.norm(diff, axis=-1), axis=-1)
+    d2r_idx = np.mean(np.linalg.norm(diff, axis=-1), axis=-1)
     # Get n_pose equally spaced poses
-    sorted_indices = np.argsort(dist2ref)
+    sorted_indices = np.argsort(d2r_idx)
     choice_of_choice = np.round(np.linspace(0, len(MP)-1, n_pose)).astype(int)
     choice_indices = sorted_indices[choice_of_choice]
 
     examples = MP[choice_indices]
     examples_indices = choice_indices
-    example_distances = dist2ref[choice_indices]
+    example_distances = d2r_idx[choice_indices]
     var_on_examples = []
     var_indices = []
 
@@ -343,10 +393,10 @@ def plot_dset_statistics(MP, n_pose=5):
 
         # Distances between current pose and all others
         diff = all_poses - np.expand_dims(kps, 0)
-        dist2ref = np.linalg.norm(diff, axis=-1)
-        dist2ref = np.mean(dist2ref, axis=-1)
+        d2r_idx = np.linalg.norm(diff, axis=-1)
+        d2r_idx = np.mean(d2r_idx, axis=-1)
 
-        ax1.hist(dist2ref, alpha=0.5, label='$\Delta={:0.2}$'.format(dist))
+        ax1.hist(d2r_idx, alpha=0.5, label='$\Delta={:0.2}$'.format(dist))
 
     ax1.set_title('Distances to {} reference poses'.format(n_pose))
     ax1.set_ylabel('Count')
@@ -371,18 +421,18 @@ def mean_plot(MP, n_pose=10, n_app=250, sp=None):
     # Distance of reference to all other poses to sort them accordingly
     diff = all_poses - np.expand_dims(ref_pose, 0)
     print(diff.shape)
-    dist2ref = np.mean(np.linalg.norm(diff, axis=-1), axis=-1)
-    print(dist2ref.shape)
+    d2r_idx = np.mean(np.linalg.norm(diff, axis=-1), axis=-1)
+    print(d2r_idx.shape)
 
     # Get n_pose equally spaced poses
-    sorted_indices = np.argsort(dist2ref)
+    sorted_indices = np.argsort(d2r_idx)
     choice_of_choice = np.round(np.linspace(0, len(MP)-1, n_pose)).astype(int)
     choice_indices = sorted_indices[choice_of_choice]
     print(choice_indices.shape)
 
     examples = MP[choice_indices]
     examples_indices = choice_indices
-    example_distances = dist2ref[choice_indices]
+    example_distances = d2r_idx[choice_indices]
     var_on_examples = []
     var_indices = []
 
@@ -394,16 +444,16 @@ def mean_plot(MP, n_pose=10, n_app=250, sp=None):
 
         # Distances between current pose and all others
         diff = all_poses - np.expand_dims(kps, 0)
-        dist2ref = np.linalg.norm(diff, axis=-1)
-        dist2ref = np.mean(dist2ref, axis=-1)
-        dist2ref = np.argsort(dist2ref)
-        pids_ = all_pids[dist2ref]
+        d2r_idx = np.linalg.norm(diff, axis=-1)
+        d2r_idx = np.mean(d2r_idx, axis=-1)
+        d2r_idx = np.argsort(d2r_idx)
+        pids_ = all_pids[d2r_idx]
 
         for i in trange(n_app):
             if mean_im is None:
-                mean_im = np.array(MP[dist2ref[i]]['target'])
+                mean_im = np.array(MP[d2r_idx[i]]['target'])
             else:
-                mean_im += np.array(MP[dist2ref[i]]['target'])
+                mean_im += np.array(MP[d2r_idx[i]]['target'])
 
         mean_im /= n_app
         var_ex = mean_im
@@ -505,11 +555,12 @@ if __name__ == '__main__':
     # MP1 = MultiPersonDataset('/export/scratch/jhaux/Data/olympic_sports_new/basketball_layup/-9t7-hXcl4U_01168_01301.seq_track/')
     # MP2 = MultiPersonDataset('/export/scratch/jhaux/Data/olympic_sports_new/tennis_serve/2xQquQVOjXA_00588_00725.seq_track/')
     # MP3 = MultiPersonDataset('/export/scratch/jhaux/Data/olympic_sports_new/basketball_layup/ZQkt3S4WY5Y_01834_01986.seq_track')
+    MP4 = MultiPersonDataset('/export/scratch/jhaux/Data/AEON/AEON/Airport02/AEON_20171117_C-CI-001_Airport02_lossless.mkv_track')
 
     # MP = MP1 + MP2 + MP3
     # n = len(set(MP.labels['video_path']))
 
-    # # plot_seqs(MP, 1)  # n)
+    plot_seqs(MP4, 1)  # n)
 
     np.random.seed(42)
 
@@ -527,22 +578,27 @@ if __name__ == '__main__':
     import re
 
     # https://regex101.com/r/C2NQu4/1
-    regex = re.compile('.+seq$')
+    regex = re.compile('.+mkv$')
 
-    root ='/export/scratch/jhaux/Data/olympic_sports_new/'
+    root ='/export/scratch/jhaux/Data/AEON/AEON/Airport02/'
+    # root ='/export/scratch/jhaux/Data/olympic_sports_new/'
     # root ='/export/scratch/jhaux/Data/olympic_test/'
     videos = [v for v in listfiles(root) if regex.match(v) is not None]
     videos = np.random.choice(videos, size=min(len(videos), 100))
+    print('\n'.join(sorted(videos)))
 
     MP = None
     for v in videos:
         v += '_track'
         try:
+            new_mp = MultiPersonDataset(v)
             if MP is None:
-                MP = MultiPersonDataset(v)
+                MP = new_mp
             else:
-                MP += MultiPersonDataset(v)
+                MP += new_mp
+            print(v)
+            plot_seqs(new_mp)
         except Exception as e:
             print(e)
 
-    plot_app_variance_at_similiar_pose(MP)
+    # plot_app_variance_at_similiar_pose(MP)

@@ -23,7 +23,7 @@ from sklearn.model_selection import train_test_split
 
 class AggregatedMultiPersonDataset(DatasetMixin):
     def __init__(self, config, root=None, ext=['mp4'], load_images=False,
-                 force=False, debug=False):
+                 force=False, debug=False, filter_fn=lambda vids: vids):
         '''Will return paths to crops, masks and keypoints of persons sorted by
         their respective frame index.
         Frames which are smaller than a third of config[`spatial_size`] will be
@@ -68,6 +68,9 @@ class AggregatedMultiPersonDataset(DatasetMixin):
                 keeping this in mind.
         debug : bool
             Only use the first 2 found videos.
+        filter_fn : Callable
+            Function which takes the list of names of the detected videos and
+            returns a possibly modified list of video names.
         '''
 
         self.config = config
@@ -106,8 +109,12 @@ class AggregatedMultiPersonDataset(DatasetMixin):
             with open(video_list, 'r') as vfile:
                 videos = yaml.safe_load(vfile)
 
-        if debug or config.setdefault('debug_mode', False):
+        if debug or config.setdefault('debug_mode', False) \
+                or bool(os.environ.get('DEBUG', False)):
             videos = videos[:2]
+
+        self.logger.debug('Videos:\n{}'
+                         .format('\n'.join(videos)))
 
         # Now define which split of the data we want to use. There are two
         # splits, train and test. To use both specify in the config 
@@ -129,6 +136,8 @@ class AggregatedMultiPersonDataset(DatasetMixin):
         videos = []
         for s in split:
             videos += splits[s]
+
+        videos = filter_fn(videos)
 
         split_s = ' and '.join(split)
         self.logger.info('Using {}-split: {} videos'
@@ -218,9 +227,37 @@ class AggregatedMultiPersonDataset(DatasetMixin):
         # to be compatible with the Sequence dataset and make_abc_dataset, we
         # need to add a `fid` key and a `pid` key which is unique over all MPs
         self.MP.labels['fid'] = self.MP.labels['sequence_idx']
+
         vids = self.MP.labels['video_path']
-        pids = np.array(self.MP.labels['person_id']).astype(str)
-        self.MP.labels['pid'] = np.core.defchararray.add(vids, pids)
+
+        pid_path = os.path.join(root, 'pids.npy')
+        if not os.path.exists(pid_path) or force:
+            pids = np.array(self.MP.labels['person_id']).astype(str)
+            pid_labels = np.stack([vids, pids], axis=-1)
+            unique_pids = np.char.join('', list(pid_labels) + [''])[:-1]
+
+            np.save(pid_path, unique_pids)
+            self.logger.info('saved pid labels to {}'.format(pid_path))
+        else:
+            unique_pids = np.load(pid_path)
+            self.logger.info('loaded pid labels from {}'.format(pid_path))
+            assert len(unique_pids) == len(self.MP)
+        self.MP.labels['pid'] = unique_pids
+
+        video_fid_path = os.path.join(root, 'video_fids.npy')
+        if not os.path.exists(video_fid_path) or force:
+            video_fids = np.array(self.MP.labels['frame_idx']).astype(str)
+            video_fid_labels = np.stack([vids, video_fids], axis=-1)
+            unique_video_fids = np.char.join('', list(video_fid_labels) + [''])[:-1]
+
+            np.save(video_fid_path, unique_video_fids)
+            self.logger.info('saved video_fid labels to {}'.format(video_fid_path))
+        else:
+            unique_video_fids = np.load(video_fid_path)
+            self.logger.info('loaded video_fid labels from {}'.format(video_fid_path))
+            assert len(unique_video_fids) == len(self.MP)
+
+        self.MP.labels['video_fid'] = unique_video_fids
 
         kps = np.copy(self.MP.labels['keypoints_rel'])
         kps[..., :2] = kps[..., :2] * self.crop_size

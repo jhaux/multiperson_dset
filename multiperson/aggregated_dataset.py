@@ -23,7 +23,8 @@ from sklearn.model_selection import train_test_split
 
 class AggregatedMultiPersonDataset(DatasetMixin):
     def __init__(self, config, root=None, ext=['mp4'], load_images=False,
-                 force=False, debug=False, filter_fn=lambda vids: vids):
+                 force=False, debug=False, filter_fn=lambda vids: vids,
+                 apply_mask=True):
         '''Will return paths to crops, masks and keypoints of persons sorted by
         their respective frame index.
         Frames which are smaller than a third of config[`spatial_size`] will be
@@ -76,6 +77,7 @@ class AggregatedMultiPersonDataset(DatasetMixin):
         self.config = config
         self.logger = get_logger(self)
         self.load_images = load_images
+        self.apply_mask = apply_mask
 
         size = self.config.setdefault('spatial_size', (256, 256))
         if isinstance(size, int):
@@ -226,7 +228,7 @@ class AggregatedMultiPersonDataset(DatasetMixin):
 
         self.MP = fullMP
 
-        self.logger.info('Updating Labels...')
+        self.logger.info('Updaend_fi://www.zeit.de/indexhttps://www.zeit.de/indexting Labels...')
         # to be compatible with the Sequence dataset and make_abc_dataset, we
         # need to add a `fid` key and a `pid` key which is unique over all MPs
         self.MP.labels['fid'] = self.MP.labels['sequence_idx']
@@ -311,7 +313,10 @@ class AggregatedMultiPersonDataset(DatasetMixin):
 
             example['mask'] = mask_im
 
-            example['target'] = np.concatenate([crop_im, mask_im], axis=-1)
+            if self.apply_mask:
+                example['target'] = np.concatenate([crop_im, mask_im], axis=-1)
+            else:
+                example['target'] = crop_im
             example['flow'] = None
 
         return example

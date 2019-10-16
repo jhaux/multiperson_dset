@@ -112,6 +112,7 @@ class AggregatedMultiPersonDataset(DatasetMixin):
         if debug or config.setdefault('debug_mode', False) \
                 or bool(os.environ.get('DEBUG', False)):
             videos = videos[:2]
+            self.logger.info('Debug mode! Only using 2 videos.')
 
         self.logger.debug('Videos:\n{}'
                          .format('\n'.join(videos)))
@@ -119,10 +120,12 @@ class AggregatedMultiPersonDataset(DatasetMixin):
         # Now define which split of the data we want to use. There are two
         # splits, train and test. To use both specify in the config 
         # split: [train, eval]
-        mode = self.config.setdefault('mode', 'train')
+        mode = self.config['mode']
         split = self.config.setdefault('data_split', None)
         seed = self.config.setdefault('random_seed', 42)
         test_size = self.config.setdefault('test_size', 0.2)
+
+        n_all_videos = len(videos)
 
         train_vids, test_vids = train_test_split(
                 videos, test_size=test_size, random_state=seed, shuffle=False
@@ -140,8 +143,8 @@ class AggregatedMultiPersonDataset(DatasetMixin):
         videos = filter_fn(videos)
 
         split_s = ' and '.join(split)
-        self.logger.info('Using {}-split: {} videos'
-                         .format(split_s, len(videos)))
+        self.logger.info('Using {}-split: {} videos of {}'
+                         .format(split_s, len(videos), n_all_videos))
 
         # Given the videos, see if they have been processed yet and if so
         # concatenate those together.
@@ -178,7 +181,7 @@ class AggregatedMultiPersonDataset(DatasetMixin):
                                                       min_seq_len,
                                                       True)
                 long_seqs = np.argwhere(long_seqs)
-                long_seqs = np.squeeze(long_seqs)
+                long_seqs = np.squeeze(long_seqs, -1)
 
                 lens += list(seq_lens)
                 self.logger.debug('ls {}'.format(long_seqs))
@@ -208,10 +211,10 @@ class AggregatedMultiPersonDataset(DatasetMixin):
         self.logger.debug('Dropped Videos:\n{}'
                           .format('\n'.join(dropped_vids)))
 
-        self.logger.info('Average sequense length: {}+-{} (before filtering)'
+        self.logger.info('Average sequence length: {}+-{} (before filtering)'
                          .format(np.mean(lens), np.std(lens)))
         lens = np.array(lens)
-        self.logger.info('Average sequense length: {}+-{} (after filtering)'
+        self.logger.info('Average sequence length: {}+-{} (after filtering)'
                          .format(np.mean(lens[lens > min_seq_len]),
                                  np.std(lens[lens > min_seq_len])))
 
@@ -230,7 +233,8 @@ class AggregatedMultiPersonDataset(DatasetMixin):
 
         vids = self.MP.labels['video_path']
 
-        pid_path = os.path.join(root, 'pids.npy')
+        pid_path = os.path.join(root, '{}pids.npy'.format('-'.join(split)))
+        self.logger.info('Trying to load unique pids from {}'.format(pid_path))
         if not os.path.exists(pid_path) or force:
             pids = np.array(self.MP.labels['person_id']).astype(str)
             pid_labels = np.stack([vids, pids], axis=-1)
@@ -244,7 +248,8 @@ class AggregatedMultiPersonDataset(DatasetMixin):
             assert len(unique_pids) == len(self.MP)
         self.MP.labels['pid'] = unique_pids
 
-        video_fid_path = os.path.join(root, 'video_fids.npy')
+        video_fid_path = os.path.join(root, '{}video_fids.npy'.format('-'.join(split)))
+        self.logger.info('Trying to load unique video_fids from {}'.format(video_fid_path))
         if not os.path.exists(video_fid_path) or force:
             video_fids = np.array(self.MP.labels['frame_idx']).astype(str)
             video_fid_labels = np.stack([vids, video_fids], axis=-1)

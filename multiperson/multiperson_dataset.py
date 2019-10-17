@@ -17,7 +17,8 @@ except ImportError as e:
 
 class MultiPersonDataset(CsvDataset):
     '''Expects the following Datastructure:
-    .. codeblock::
+    .. code-block::
+
         data_root/
             |- nested folders/
             |   |- VIDEO1
@@ -39,6 +40,9 @@ class MultiPersonDataset(CsvDataset):
             |   |- VIDEO1_track/
             |   |    |- alphapose-forvis-tracked.json
             |   |    ...
+            |   |- VIDEO1_additional_labels/
+            |   |    |- new_keypoints.npy
+            |   |    ...
             |   |- VIDEO2
             |   |- VIDEO2_frames/
             |   |- VIDEO2_masks/
@@ -46,6 +50,7 @@ class MultiPersonDataset(CsvDataset):
             |   |- VIDEO2_track/
             |   ...
             ...
+
 
     ``VIDEO1`` etc, are the videos, from which frames ``frame_XX.png`` are
     extracted. The file ``alphapose-forvis-tracked.json`` should following the
@@ -105,6 +110,25 @@ class MultiPersonDataset(CsvDataset):
                          memory_map=True)
 
         self.labels.update(np.load(labels_name))
+
+        # # add additional labels, possibly made at some later point in time
+        # labels_path = data_root[:-len('track')] + 'additional_labels'
+        # if os.path.exists(labels_path):
+        #     additional_labels = [l for l in os.listdir(labels_path)
+        #                          if l.endswith('.npy')]
+
+        #     for labels in additional_labels:
+        #         name = labels[:-4]
+        #         path = os.path.join(labels_path, labels)
+
+        #         while name in self.labels:
+        #             name = name + '_add'
+
+        #         self.labels[name] = np.load(path)
+        # else:
+        #     print('No additional labels found at {}'.format(labels_path))
+
+
 
     def get_example(self, idx):
         example = {k: self.labels[k][idx] for k in self.labels}

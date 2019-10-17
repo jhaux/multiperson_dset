@@ -13,7 +13,7 @@ from edflow.data.util import adjust_support
 from multiperson.multiperson_dataset import MultiPersonDataset
 
 from PIL import Image
-from tqdm import tqdm
+from tqdm.autonotebook import tqdm
 import numpy as np
 import os
 import re
@@ -133,21 +133,6 @@ class AggregatedMultiPersonDataset(DatasetMixin):
                 videos, test_size=test_size, random_state=seed, shuffle=False
                 )
 
-        splits = {'train': train_vids, 'eval': test_vids}
-
-        if split is None:
-            split = [mode]
-
-        videos = []
-        for s in split:
-            videos += splits[s]
-
-        videos = filter_fn(videos)
-
-        split_s = ' and '.join(split)
-        self.logger.info('Using {}-split: {} videos of {}'
-                         .format(split_s, len(videos), n_all_videos))
-
         # Given the videos, see if they have been processed yet and if so
         # concatenate those together.
         MPs = []
@@ -228,7 +213,36 @@ class AggregatedMultiPersonDataset(DatasetMixin):
 
         self.MP = fullMP
 
-        self.logger.info('Updaend_fi://www.zeit.de/indexhttps://www.zeit.de/indexting Labels...')
+        # =========
+
+        splits = {'train': train_vids, 'eval': test_vids}
+        self.splits = splits
+
+        if split is None:
+            split = [mode]
+
+        videos = []
+        for s in split:
+            videos += splits[s]
+
+        videos = filter_fn(videos)
+
+        self.videos = videos
+
+        split_s = ' and '.join(split)
+        self.logger.info('Using {}-split: {} videos of {}'
+                         .format(split_s, len(videos), n_all_videos))
+
+        sub_indices = []
+        for v in videos:
+            sub_indices += [np.where(self.MP.labels['video_path'] == v)[0]]
+
+        sub_indices = np.concatenate(sub_indices)
+        self._sub_indices = sub_indices
+
+        self.MP = SubDataset(self.MP, sub_indices)
+
+        self.logger.info('Updating Labels...')
         # to be compatible with the Sequence dataset and make_abc_dataset, we
         # need to add a `fid` key and a `pid` key which is unique over all MPs
         self.MP.labels['fid'] = self.MP.labels['sequence_idx']
@@ -241,6 +255,7 @@ class AggregatedMultiPersonDataset(DatasetMixin):
             pids = np.array(self.MP.labels['person_id']).astype(str)
             pid_labels = np.stack([vids, pids], axis=-1)
             unique_pids = np.char.join('', list(pid_labels) + [''])[:-1]
+            unique_pids = unique_pids[self._sub_indices]
 
             np.save(pid_path, unique_pids)
             self.logger.info('saved pid labels to {}'.format(pid_path))
@@ -256,6 +271,7 @@ class AggregatedMultiPersonDataset(DatasetMixin):
             video_fids = np.array(self.MP.labels['frame_idx']).astype(str)
             video_fid_labels = np.stack([vids, video_fids], axis=-1)
             unique_video_fids = np.char.join('', list(video_fid_labels) + [''])[:-1]
+            unique_video_fids = unique_video_fids[self._sub_indices]
 
             np.save(video_fid_path, unique_video_fids)
             self.logger.info('saved video_fid labels to {}'.format(video_fid_path))
